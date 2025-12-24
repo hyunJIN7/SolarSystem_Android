@@ -1,25 +1,71 @@
 #include <jni.h>
 #include <android/native_window_jni.h>
 
+// EGL 및 OpenGL ES 헤더 파일 포함
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
 
-// 상태 유지 용 전역 변수
+// 렌더링 스레드
+#include <thread>
+#include <atomic>
+#include <chrono>
+
+// EGL 상태 유지 용 전역 변수
 static EGLDisplay eglDisplay = EGL_NO_DISPLAY;
 static EGLSurface eglSurface = EGL_NO_SURFACE;
 static EGLContext eglContext = EGL_NO_CONTEXT;
+
+// 렌더 스레드 관련 전역 변수
+static std::thread renderThread;
+static std::atomic<bool> isRunning(false);
+static ANativeWindow* nativeWindow = nullptr;
+
+void renderLoop(){
+    // EGLContext는 스레드별로 바인딩되므로 이 스레드에 바인딩해야 함
+    // eglMakeCurrent 반드시 렌더 스레드에서
+    eglMakeCurrent(eglDisplay,
+                   eglSurface,
+                   eglSurface,
+                   eglContext);
+
+    while(isRunning){
+        glClearColor(0.1,0.2,0.4,1.0);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        eglSwapBuffers(eglDisplay,eglSurface);
+
+        // 60 FPS로 렌더링
+        std::this_thread::sleep_for(
+            std::chrono::microseconds(16)
+        );
+    }
+    // 스레드 종료 시 컨텍스트 언바인딩
+    eglMakeCurrent(
+            eglDisplay,
+            EGL_NO_SURFACE,
+            EGL_NO_SURFACE,
+            EGL_NO_CONTEXT
+            );
+}
 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_example_solarsystem_MainActivity_onSurfaceCreated(JNIEnv *env, jobject thiz,
                                                            jobject surface) {
     // Java Surface 객체에서 ANativeWindow 생성
-    ANativeWindow* window = ANativeWindow_fromSurface(env,surface);
+    nativeWindow = ANativeWindow_fromSurface(env,surface);
 
     // EGLDisplay 초기화 (GPU 연결)
     eglDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    eglInitialize(eglDisplay, nullptr, nullptr);
-
+    if (eglDisplay == EGL_NO_DISPLAY) {
+        // 오류 처리: 로그 출력 후 함수 종료
+//        __android_log_print(ANDROID_LOG_ERROR, "EGL", "eglGetDisplay 실패");
+        return;
+    }
+    if (!eglInitialize(eglDisplay, nullptr, nullptr)) {
+//        __android_log_print(ANDROID_LOG_ERROR, "EGL", "eglInitialize 실패");
+        return;
+    }
     // EGLConfig 설정(픽셀 포맷)
     const EGLint configAttribs[] = {
             EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
@@ -43,23 +89,11 @@ Java_com_example_solarsystem_MainActivity_onSurfaceCreated(JNIEnv *env, jobject 
     eglContext = eglCreateContext(eglDisplay,eglConfig,EGL_NO_CONTEXT,contextAttribs);
 
     // EGLSurface 생성 (렌더링 대상, Window에 붙이기)
-    eglSurface = eglCreateWindowSurface(eglDisplay,eglConfig,window,nullptr);
+    eglSurface = eglCreateWindowSurface(eglDisplay,eglConfig,nativeWindow,nullptr);
 
-    // 컨텍스트와 서피스를 현재 스레드에 바인딩
-    eglMakeCurrent(
-            eglDisplay,
-            eglSurface,
-            eglSurface,
-            eglContext
-            );
-
-    // OpenGL 테스트 렌더링
-    glViewport(0,0,ANativeWindow_getWidth(window),ANativeWindow_getHeight(window));
-    glClearColor(0.1f,0.2f,0.3f,1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    // 화면에 출력
-    eglSwapBuffers(eglDisplay,eglSurface);
+    // 렌더 스레드 시작
+    isRunning = true;
+    renderThread = std::thread(renderLoop);
 }
 extern "C"
 JNIEXPORT void JNICALL
@@ -70,23 +104,18 @@ Java_com_example_solarsystem_MainActivity_onSurfaceChanged(JNIEnv *env, jobject 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_example_solarsystem_MainActivity_onSurfaceDestroyed(JNIEnv *env, jobject thiz) {
-    if(eglDisplay != EGL_DEFAULT_DISPLAY){
-        eglMakeCurrent(
-                eglDisplay,
-                EGL_NO_SURFACE,
-                EGL_NO_SURFACE,
-                EGL_NO_CONTEXT
-        );
-        if(eglSurface != EGL_NO_SURFACE){
-            eglDestroySurface(eglDisplay,eglSurface);
-            eglSurface = EGL_NO_SURFACE;
-        }
-        if(eglContext != EGL_NO_CONTEXT) {
-            eglDestroyContext(eglDisplay, eglContext);
-            eglContext = EGL_NO_CONTEXT;
-        }
+    isRunning = false;
 
-        eglTerminate(eglDisplay);
-        eglDisplay = EGL_NO_DISPLAY;
+    if(renderThread.joinable()){
+        renderThread.join();
     }
+
+    if(eglDisplay != EGL_DEFAULT_DISPLAY){
+        eglDestroySurface(eglDisplay, eglSurface);
+        eglDestroyContext(eglDisplay, eglContext);
+        eglTerminate(eglDisplay);
+    }
+    eglSurface = EGL_NO_SURFACE;
+    eglContext = EGL_NO_CONTEXT;
+    eglDisplay = EGL_NO_DISPLAY;
 }
