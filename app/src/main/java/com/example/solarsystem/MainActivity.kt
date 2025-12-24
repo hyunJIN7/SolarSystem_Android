@@ -1,34 +1,66 @@
 package com.example.solarsystem
 
-import androidx.appcompat.app.AppCompatActivity
+import android.content.Context
 import android.os.Bundle
-import android.widget.TextView
-import com.example.solarsystem.databinding.ActivityMainBinding
+import android.view.Surface
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import androidx.activity.ComponentActivity
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.activity.compose.setContent
 
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var binding: ActivityMainBinding
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-
-        // Example of a call to a native method
-        binding.sampleText.text = stringFromJNI()
-    }
-
-    /**
-     * A native method that is implemented by the 'solarsystem' native library,
-     * which is packaged with this application.
-     */
-    external fun stringFromJNI(): String
-
+class MainActivity : ComponentActivity() {
     companion object {
         // Used to load the 'solarsystem' library on application startup.
         init {
             System.loadLibrary("solarsystem")
         }
     }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent{
+            MainScrenn()
+        }
+    }
+
+    @Composable
+    fun MainScrenn() {
+        AndroidView(
+            modifier = Modifier,
+            factory = {
+                context->
+                NativeSurfaceView(context)
+            }
+        )
+    }
+
+
+    inner class NativeSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
+        init {
+            holder.addCallback(this)
+        }
+        override fun surfaceCreated(holder: SurfaceHolder) {
+            onSurfaceCreated(holder.surface)
+        }
+        override fun surfaceChanged(
+            holder: SurfaceHolder,
+            format: Int,
+            width: Int,
+            height: Int
+        ) {
+            onSurfaceChanged(width, height)
+        }
+        override fun surfaceDestroyed(holder: SurfaceHolder) {
+            onSurfaceDestroyed()
+        }
+    }
+
+
+    // JNI 함수 선언. Bridege to native code
+    external fun onSurfaceCreated(surface : Surface)
+    external fun onSurfaceChanged(width : Int, height : Int)
+    external fun onSurfaceDestroyed()
 }
